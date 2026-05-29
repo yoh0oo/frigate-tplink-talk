@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+.git/
+.github/
+*.bin
+*.ipa
+*.pcap
+*.log
+tmp/

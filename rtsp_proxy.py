@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """RTSP Proxy + MULTITRANS Talk for TP-Link Camera → Frigate two-way audio."""
 
-import socket, threading, re, os, struct, time, random, base64, hashlib, queue
+import socket, threading, re, os, struct, time, random, hashlib
 
 CAM_HOST = os.getenv('CAMERA_HOST', '10.40.0.1')
 CAM_PORT = int(os.getenv('CAMERA_PORT', '554'))
 CAM_USER = os.getenv('CAMERA_USER', 'admin')
 CAM_PASS = os.getenv('CAMERA_PASSWORD', 'admin')
 CAM_PATH = os.getenv('CAMERA_PATH', '/stream1')
-LISTEN_PORT = int(os.getenv('LISTEN_PORT', '8554'))
+LISTEN_PORT = int(os.getenv('LISTEN_PORT', '554'))
+TALK_IDLE_TIMEOUT = float(os.getenv('TALK_IDLE_TIMEOUT', '1.5'))
+NON_FATAL_TALK_ERROR_CODES = {-52411}
 
 _GT = [0x48,0x48,0x48,0x48,0x50,0x50,0x50,0x50,0xfd,0xfd,0xfd,0xfd,0xed,0xed,0xed,0xed,0xb9,0xb9,0xb9,0xb9,0xda,0xda,0xda,0xda,0x5e,0x5e,0x5e,0x5e,0x15,0x15,0x15,0x15,0x46,0x46,0x46,0x46,0x57,0x57,0x57,0x57,0xa7,0xa7,0xa7,0xa7,0x8d,0x8d,0x8d,0x8d,0x9d,0x9d,0x9d,0x9d,0x84,0x84,0x84,0x84,0x90,0x90,0x90,0x90,0xd8,0xd8,0xd8,0xd8,0xab,0xab,0xab,0xab,0x0,0x0,0x0,0x0,0x8c,0x8c,0x8c,0x8c,0xbc,0xbc,0xbc,0xbc,0xd3,0xd3,0xd3,0xd3,0xa,0xa,0xa,0xa,0xf7,0xf7,0xf7,0xf7,0xe4,0xe4,0xe4,0xe4,0x58,0x58,0x58,0x58,0x5,0x5,0x5,0x5,0xb8,0xb8,0xb8,0xb8,0xb3,0xb3,0xb3,0xb3,0x45,0x45,0x45,0x45,0x6,0x6,0x6,0x6,0xd0,0xd0,0xd0,0xd0,0x2c,0x2c,0x2c,0x2c,0x1e,0x1e,0x1e,0x1e,0x8f,0x8f,0x8f,0x8f,0xca,0xca,0xca,0xca,0x3f,0x3f,0x3f,0x3f,0xf,0xf,0xf,0xf,0x2,0x2,0x2,0x2,0xc1,0xc1,0xc1,0xc1,0xaf,0xaf,0xaf,0xaf,0xbd,0xbd,0xbd,0xbd,0x3,0x3,0x3,0x3,0x1,0x1,0x1,0x1,0x13,0x13,0x13,0x13,0x8a,0x8a,0x8a,0x8a,0x6b,0x6b,0x6b,0x6b,0x3a,0x3a,0x3a,0x3a,0x91,0x91,0x91,0x91,0x11,0x11,0x11,0x11,0x41,0x41,0x41,0x41,0x4f,0x4f,0x4f,0x4f,0x67,0x67,0x67,0x67,0xdc,0xdc,0xdc,0xdc,0xea,0xea,0xea,0xea,0x97,0x97,0x97,0x97,0xf2,0xf2,0xf2,0xf2,0xcf,0xcf,0xcf,0xcf,0xce,0xce,0xce,0xce,0xf0,0xf0,0xf0,0xf0,0xb4,0xb4,0xb4,0xb4,0xe6,0xe6,0xe6,0xe6,0x73,0x73,0x73,0x73,0x96,0x96,0x96,0x96,0xac,0xac,0xac,0xac,0x74,0x74,0x74,0x74,0x22,0x22,0x22,0x22,0xe7,0xe7,0xe7,0xe7,0xad,0xad,0xad,0xad,0x35,0x35,0x35,0x35,0x85,0x85,0x85,0x85,0xe2,0xe2,0xe2,0xe2,0xf9,0xf9,0xf9,0xf9,0x37,0x37,0x37,0x37,0xe8,0xe8,0xe8,0xe8,0x1c,0x1c,0x1c,0x1c,0x75,0x75,0x75,0x75,0xdf,0xdf,0xdf,0xdf,0x6e,0x6e,0x6e,0x6e,0x47,0x47,0x47,0x47,0xf1,0xf1,0xf1,0xf1,0x1a,0x1a,0x1a,0x1a,0x71,0x71,0x71,0x71,0x1d,0x1d,0x1d,0x1d,0x29,0x29,0x29,0x29,0xc5,0xc5,0xc5,0xc5,0x89,0x89,0x89,0x89,0x6f,0x6f,0x6f,0x6f,0xb7,0xb7,0xb7,0xb7,0x62,0x62,0x62,0x62,0xe,0xe,0xe,0xe,0xaa,0xaa,0xaa,0xaa,0x18,0x18,0x18,0x18,0xbe,0xbe,0xbe,0xbe,0x1b,0x1b,0x1b,0x1b,0xfc,0xfc,0xfc,0xfc,0x56,0x56,0x56,0x56,0x3e,0x3e,0x3e,0x3e,0x4b,0x4b,0x4b,0x4b,0xc6,0xc6,0xc6,0xc6,0xd2,0xd2,0xd2,0xd2,0x79,0x79,0x79,0x79,0x20,0x20,0x20,0x20,0x9a,0x9a,0x9a,0x9a,0xdb,0xdb,0xdb,0xdb,0xc0,0xc0,0xc0,0xc0,0xfe,0xfe,0xfe,0xfe,0x78,0x78,0x78,0x78,0xcd,0xcd,0xcd,0xcd,0x5a,0x5a,0x5a,0x5a,0xf4,0xf4,0xf4,0xf4,0x1f,0x1f,0x1f,0x1f,0xdd,0xdd,0xdd,0xdd,0xa8,0xa8,0xa8,0xa8,0x33,0x33,0x33,0x33,0x88,0x88,0x88,0x88,0x7,0x7,0x7,0x7,0xc7,0xc7,0xc7,0xc7,0x31,0x31,0x31,0x31,0xb1,0xb1,0xb1,0xb1,0x12,0x12,0x12,0x12,0x10,0x10,0x10,0x10,0x59,0x59,0x59,0x59,0x27,0x27,0x27,0x27,0x80,0x80,0x80,0x80,0xec,0xec,0xec,0xec,0x5f,0x5f,0x5f,0x5f,0x60,0x60,0x60,0x60,0x51,0x51,0x51,0x51]
 def pcm2g711(p):
@@ -31,9 +33,12 @@ def g711_gain(data,factor=1):
     return pcm2g711(pcm)
 
 class TalkSession:
-    def __init__(self):
+    def __init__(self, owner):
+        self.owner=owner
         self.buf=bytearray()
         self.sock=None
+        self.dead=False
+        self.stop_event=threading.Event()
         self.seq=0
         self.ts=0
         self.ssrc=random.randint(0,0xffffffff)
@@ -42,8 +47,25 @@ class TalkSession:
         self.t.start()
 
     def send(self,g711):
+        if self.dead:
+            return
         with self.lock:
             self.buf.extend(g711)
+            if len(self.buf)>32000:
+                self.buf=self.buf[-32000:]
+
+    def stop(self):
+        self.stop_event.set()
+        try:
+            if self.sock:
+                self.sock.shutdown(socket.SHUT_RDWR)
+        except:
+            pass
+        try:
+            if self.sock:
+                self.sock.close()
+        except:
+            pass
 
     def _run(self):
         try:
@@ -51,11 +73,15 @@ class TalkSession:
             s.settimeout(10)
             s.connect((CAM_HOST,CAM_PORT))
             self.sock=s
+            if self.stop_event.is_set():
+                return
             s.sendall(b'MULTITRANS rtsp://127.0.0.1/multitrans RTSP/1.0\r\nCSeq:0\r\nContent-Length:0\r\nX-Handshake:unused debug\r\n\r\n')
             b=b''
             while b'\r\n\r\n' not in b:
                 c=s.recv(4096)
                 b+=c
+            if self.stop_event.is_set():
+                return
             h=b[:b.find(b'\r\n\r\n')].decode(errors='ignore')
             n=re.search(r'nonce="([^"]+)"',h).group(1)
             rm=re.search(r'realm="([^"]+)"',h).group(1)
@@ -67,12 +93,16 @@ class TalkSession:
             while b'\r\n\r\n' not in b:
                 c=s.recv(4096)
                 b+=c
+            if self.stop_event.is_set():
+                return
             talk='{"type":"request","seq":0,"params":{"method":"get","talk":{"mode":"aec"}}}'
             s.sendall(f'MULTITRANS rtsp://127.0.0.1/multitrans RTSP/1.0\r\nCSeq:2\r\nContent-Type:application/json\r\nContent-Length:{len(talk)}\r\n\r\n{talk}'.encode())
             b=b''
             while b'\r\n\r\n' not in b:
                 c=s.recv(4096)
                 b+=c
+            if self.stop_event.is_set():
+                return
             hdr=b[:b.find(b'\r\n\r\n')].decode(errors='ignore')
             cl=re.search(r'Content-Length:\s*(\d+)',hdr,re.I)
             body=''
@@ -83,9 +113,14 @@ class TalkSession:
                     b+=s.recv(min(4096,n-(len(b)-bs)))
                 body=b[bs:bs+n].decode(errors='ignore')
             print(f"  [Talk] response: {body[:200]}")
+            m=re.search(r'"error_code"\s*:\s*(-?\d+)',body)
+            if m:
+                code=int(m.group(1))
+                if code!=0 and code not in NON_FATAL_TALK_ERROR_CODES:
+                    raise RuntimeError(f"camera rejected talk session: {code}")
             chunk=320
             silence=b'\xff\xff\x7f\x7f'*80
-            while True:
+            while not self.stop_event.is_set():
                 with self.lock:
                     if len(self.buf)>=chunk:
                         data=bytes(self.buf[:chunk])
@@ -99,6 +134,7 @@ class TalkSession:
         except Exception as e:
             print(f"  [Talk] {e}")
         finally:
+            self.dead=True
             try:
                 self.sock.close()
             except:
@@ -118,12 +154,49 @@ class TalkSession:
 _talk_session=None
 _talk_lock=threading.Lock()
 
-def talk_send(g711):
+def stop_talk_session(session=None):
     global _talk_session
     with _talk_lock:
-        if _talk_session is None or _talk_session.sock is None:
-            _talk_session=TalkSession()
-    _talk_session.send(g711)
+        target=session or _talk_session
+        if target is None:
+            return
+        if _talk_session is target:
+            _talk_session=None
+    target.stop()
+
+def talk_send(g711, owner):
+    global _talk_session
+    with _talk_lock:
+        if _talk_session is not None and _talk_session.owner!=owner:
+            old=_talk_session
+            _talk_session=None
+            old.stop()
+        if _talk_session is None or _talk_session.dead:
+            _talk_session=TalkSession(owner)
+        session=_talk_session
+    session.send(g711)
+    return session
+
+def rtp_payload(packet):
+    if len(packet)<12 or packet[0]>>6!=2:
+        return b''
+    cc=packet[0]&0x0f
+    header_len=12+cc*4
+    if len(packet)<header_len:
+        return b''
+    if packet[0]&0x10:
+        if len(packet)<header_len+4:
+            return b''
+        ext_len=struct.unpack('!H',packet[header_len+2:header_len+4])[0]*4
+        header_len+=4+ext_len
+        if len(packet)<header_len:
+            return b''
+    payload=packet[header_len:]
+    if packet[0]&0x20 and payload:
+        pad=payload[-1]
+        if pad<=len(payload):
+            payload=payload[:-pad]
+    return payload
 
 def read_rtsp(s):
     r=b''
@@ -144,6 +217,7 @@ def read_rtsp(s):
     return r
 
 def handle(client, addr):
+    owner=f"{addr[0]}:{addr[1]}:{time.monotonic():.6f}"
     cam=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
     cam.settimeout(30)
     cam.connect((CAM_HOST,CAM_PORT))
@@ -159,6 +233,7 @@ def handle(client, addr):
                 m=re.search(rb"interleaved=(\d+)-(\d+)",data)
                 bc=int(m.group(1))if m else 10
                 bc_ch=bc
+                stop_talk_session()
                 cs=data.decode(errors='ignore').split('CSeq:')[1].split('\r\n')[0].strip()if b'CSeq:'in data else'99'
                 client.sendall(f"RTSP/1.0 200 OK\r\nCSeq:{cs}\r\nTransport:RTP/AVP/TCP;unicast;interleaved={bc}-{bc+1}\r\nSession:BC\r\n\r\n".encode())
                 print(f"  BC SETUP ch{bc}")
@@ -206,27 +281,60 @@ def handle(client, addr):
                     except:
                         pass
                 def l2c():
+                    import audioop
+                    buf=bytearray()
+                    rate_state=None
+                    talk=None
+                    last_talk=time.monotonic()
                     try:
+                        client.settimeout(1)
                         while True:
-                            d=client.recv(8192)
-                            if not d:
-                                break
-                            if d and d[0]==0x24 and len(d)>=4:
-                                ch=d[1]
-                                if _bc and ch==_bc:
-                                    sz=struct.unpack('!H',d[2:4])[0]
-                                    pl=d[4:4+sz]
-                                    if len(pl)>12:
-                                        import audioop
-                                        raw=pl[12:]
-                                        pcm=audioop.alaw2lin(raw,2)
-                                        pcm16=audioop.ratecv(pcm,2,1,8000,16000,None)[0]
-                                        ulaw=audioop.lin2ulaw(pcm16,2)
-                                        talk_send(ulaw)
+                            try:
+                                d=client.recv(8192)
+                                if not d:
+                                    break
+                                buf.extend(d)
+                            except socket.timeout:
+                                if talk and time.monotonic()-last_talk>TALK_IDLE_TIMEOUT:
+                                    stop_talk_session(talk)
+                                    talk=None
+                                continue
+
+                            while buf:
+                                if buf[0]!=0x24:
+                                    next_frame=buf.find(b'\x24')
+                                    if next_frame<0:
+                                        cam.sendall(bytes(buf))
+                                        buf.clear()
+                                        break
+                                    if next_frame:
+                                        cam.sendall(bytes(buf[:next_frame]))
+                                        del buf[:next_frame]
                                     continue
-                            cam.sendall(d)
-                    except:
-                        pass
+                                if len(buf)<4:
+                                    break
+                                sz=struct.unpack('!H',buf[2:4])[0]
+                                frame_len=4+sz
+                                if len(buf)<frame_len:
+                                    break
+                                ch=buf[1]
+                                packet=bytes(buf[4:frame_len])
+                                del buf[:frame_len]
+                                if _bc is not None and ch==_bc:
+                                    raw=rtp_payload(packet)
+                                    if raw:
+                                        pcm=audioop.alaw2lin(raw,2)
+                                        pcm16,rate_state=audioop.ratecv(pcm,2,1,8000,16000,rate_state)
+                                        ulaw=audioop.lin2ulaw(pcm16,2)
+                                        talk=talk_send(ulaw,owner)
+                                        last_talk=time.monotonic()
+                                    continue
+                                cam.sendall(struct.pack('!BBH',0x24,ch,sz)+packet)
+                    except Exception as e:
+                        print(f"  [Talk] relay error: {e}")
+                    finally:
+                        if talk:
+                            stop_talk_session(talk)
                 t1=threading.Thread(target=c2l,daemon=True)
                 t2=threading.Thread(target=l2c,daemon=True)
                 t1.start()
@@ -240,51 +348,11 @@ def handle(client, addr):
         cam.close()
         client.close()
 
-def start_http():
-    from http.server import HTTPServer,BaseHTTPRequestHandler
-    class H(BaseHTTPRequestHandler):
-        def do_GET(self):
-            if self.path=='/debug.wav':
-                try:
-                    import subprocess,os
-                    if os.path.exists('/tmp/debug_raw.pcm'):
-                        subprocess.run(['sox','-t','raw','-r','8000','-e','signed','-b','16','-c','1','/tmp/debug_raw.pcm','/tmp/debug_audio.wav'],check=True)
-                        with open('/tmp/debug_audio.wav','rb') as f:
-                            data=f.read()
-                        self.send_response(200)
-                        self.send_header('Content-Type','audio/wav')
-                        self.send_header('Content-Length',len(data))
-                        self.end_headers()
-                        self.wfile.write(data)
-                        return
-                except:
-                    pass
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b'ok')
-        def do_POST(self):
-            cl=int(self.headers.get('Content-Length',0))
-            if cl==0:
-                self.send_response(400)
-                self.end_headers()
-                return
-            data=self.rfile.read(cl)
-            g711=data if self.path=='/talk_g711' else pcm2g711(data)
-            threading.Thread(target=talk_send,args=(g711,),daemon=True).start()
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b'ok')
-        def log_message(self,*a):
-            pass
-    HTTPServer(('0.0.0.0',int(os.getenv('HTTP_PORT','8556'))),H).serve_forever()
-
-threading.Thread(target=start_http,daemon=True).start()
-
 srv=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
 srv.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
 srv.bind(('0.0.0.0',LISTEN_PORT))
 srv.listen(5)
-print(f"Proxy :{LISTEN_PORT} -> {CAM_HOST}:{CAM_PORT} | Talk :{os.getenv('HTTP_PORT','8556')}/talk_g711")
+print(f"Proxy :{LISTEN_PORT} -> {CAM_HOST}:{CAM_PORT} | inline talkback")
 while True:
     c,a=srv.accept()
     threading.Thread(target=handle,args=(c,a),daemon=True).start()
